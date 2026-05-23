@@ -7,7 +7,7 @@
 <script>
 // ═══════════════════════════════════════════════════════════
 // KONFIGURASI — diisi otomatis oleh sistem, jangan diedit manual
-const SHEETS_URL = "https://script.google.com/macros/s/AKfycbye86_SfBmfoSuEtl_likvdBi72O-W16LpDfJZ2xTMwWeEL9aApamzm9ES6aAy2pP16/exec";
+const SHEETS_URL = "https://script.google.com/macros/s/AKfycbwyNRa-vC3DjS3iIyKa5V4rATnds1IlB94Kr-w9YCr2m3LmCLxk6yphLLc_WLI72n4x/exec";
 const TEAM_PIN   = "siappakai";
 // ═══════════════════════════════════════════════════════════
 </script>
@@ -252,8 +252,10 @@ header{position:sticky;top:0;background:var(--bg);z-index:20;padding:10px 0 0;bo
   </div>
   <div class="step-wrap">
    <div class="step"><div class="sn">1</div><div class="sb"><strong>Buka Google Sheets baru</strong> → klik menu <strong>Extensions → Apps Script</strong> → hapus kode yang ada → paste kode berikut → klik <strong>Save (💾)</strong>:</div></div>
-   <div class="code-block" id="gs-code">function doGet(e){var s=SpreadsheetApp.getActiveSpreadsheet().getSheetByName('ytm')||SpreadsheetApp.getActiveSpreadsheet().insertSheet('ytm');return ContentService.createTextOutput(s.getRange(1,1).getValue()||'{"channels":[],"apiKeys":[]}').setMimeType(ContentService.MimeType.JSON);}
-function doPost(e){var s=SpreadsheetApp.getActiveSpreadsheet().getSheetByName('ytm')||SpreadsheetApp.getActiveSpreadsheet().insertSheet('ytm');s.getRange(1,1).setValue(e.postData.contents);return ContentService.createTextOutput('ok');}<button class="copy-btn" onclick="copyGSCode()">Copy</button></div>
+   <div class="code-block" style="padding:0;position:relative;overflow:hidden">
+    <textarea id="gs-code" readonly="" style="width:100%;height:195px;background:transparent;border:none;color:inherit;font-family:var(--mono);font-size:11px;line-height:1.6;padding:10px 12px;resize:none;outline:none;white-space:pre;overflow-x:auto;cursor:default"></textarea>
+    <button class="copy-btn" onclick="copyGSCode()">Copy</button>
+   </div>
    <div class="step"><div class="sn">2</div><div class="sb">Klik <strong>Deploy → New deployment</strong> → klik ikon ⚙️ → pilih <strong>Web app</strong> → isi description bebas → <em>Execute as:</em> <strong>Me</strong> → <em>Who has access:</em> <strong>Anyone</strong> → klik <strong>Deploy</strong> → <strong>copy URL</strong> yang muncul</div></div>
    <div class="step"><div class="sn">3</div><div class="sb">Paste URL di bawah + buat password tim → klik tombol <strong>Simpan</strong>. File <code>index.html</code> akan ter-download otomatis — <strong>file inilah yang di-deploy ke GitHub Pages</strong>, bukan file yang sedang Anda buka ini.</div></div>
   </div>
@@ -312,7 +314,7 @@ function doPost(e){var s=SpreadsheetApp.getActiveSpreadsheet().getSheetByName('y
   <span>Auto-refresh:</span>
   <button id="ar-toggle" onclick="toggleAR()" class="btn btn-sm">OFF</button>
   <span>Jam:</span>
-  <select id="ar-hour" onchange="arSettings.hour=parseInt(this.value);save()" class="sel-sm">
+  <select id="ar-hour" onchange="arSettings.hour=parseInt(this.value);save();shSaveConfig()" class="sel-sm">
    <option value="0">00:00</option><option value="1">01:00</option><option value="2">02:00</option>
    <option value="3">03:00</option><option value="4">04:00</option><option value="5">05:00</option>
    <option value="6">06:00</option><option value="7" selected="">07:00</option><option value="8">08:00</option>
@@ -373,11 +375,9 @@ let arSettings={enabled:false,hour:7,lastRun:null};
 let addTags=[], addType='own';
 const LS='ytm_traffic_v1';
 
-// ── STORAGE ──
+// ── STORAGE — localStorage only, Sheets via granular ops ──
 function save(){
-  const d={channels,apiKeys,arSettings};
-  localStorage.setItem(LS,JSON.stringify(d));
-  saveToSheets(d);
+  localStorage.setItem(LS,JSON.stringify({channels,apiKeys,arSettings}));
 }
 function loadLocal(){
   try{
@@ -390,31 +390,42 @@ function loadLocal(){
     }
   }catch(e){}
 }
-async function saveToSheets(d){
+// ── SHEETS — granular per-channel ops, bukan dump semua ──
+async function shPost(body){
   if(!SHEETS_URL)return;
-  try{await fetch(SHEETS_URL,{method:'POST',body:JSON.stringify(d),headers:{'Content-Type':'application/json'}});}catch(e){}
+  try{await fetch(SHEETS_URL,{method:'POST',body:JSON.stringify(body),headers:{'Content-Type':'application/json'}});}catch(e){}
 }
+function shUpsertCh(ch){shPost({action:'upsert_channel',channel:ch});}
+function shDeleteCh(id){shPost({action:'delete_channel',id});}
+function shSaveConfig(){shPost({action:'save_config',apiKeys,arSettings});}
+function shBulkUpsert(chs){shPost({action:'bulk_upsert',channels:chs});}
+
 async function loadFromSheets(){
   if(!SHEETS_URL)return;
   setSyncSt('⟳ Sync...');
   try{
     const r=await fetch(SHEETS_URL+(SHEETS_URL.includes('?')?'&':'?')+'t='+Date.now());
-    if(!r.ok){setSyncSt('');return;}
+    if(!r.ok){setSyncSt('⚠ Sheets tidak bisa diakses');return;}
     const d=await r.json();
-    if(Array.isArray(d.channels)&&d.channels.length>=channels.length){
+    if(d.error){setSyncSt('⚠ '+d.error);return;}
+    // Sheets selalu jadi source of truth kalau ada data
+    if(Array.isArray(d.channels)){
       channels=d.channels;
       apiKeys=(d.apiKeys||[]).map(k=>typeof k==='string'?{key:k,status:'idle'}:k);
-      if(d.arSettings)arSettings={...arSettings,...d.arSettings};
-      localStorage.setItem(LS,JSON.stringify(d));
+      if(d.arSettings)arSettings={enabled:false,hour:7,lastRun:null,...d.arSettings};
+      localStorage.setItem(LS,JSON.stringify({channels,apiKeys,arSettings}));
     }
-    setSyncSt('✓ Sync '+fmtTime(new Date()));
+    setSyncSt('✓ Sync '+fmtTime(new Date())+' · '+channels.length+' channel');
     render();
-  }catch(e){setSyncSt('⚠ Sync gagal');}
+  }catch(e){setSyncSt('⚠ Sync gagal: '+e.message);}
 }
 function setSyncSt(t){const el=document.getElementById('sync-st');if(el)el.textContent=t;}
 
 // ── AUTH ──
 function init(){
+  // Inject Apps Script code ke textarea (aman dari HTML parsing)
+  const ta=document.getElementById('gs-code');
+  if(ta)ta.value=GS_CODE;
   if(!SHEETS_URL||!TEAM_PIN){show('scr-setup');return;}
   loadLocal();
   if(sessionStorage.getItem('ytm_auth')===TEAM_PIN){startApp();}
@@ -444,12 +455,75 @@ function show(id){
     if(el)el.style.display=s===id?(s==='app'?'block':'flex'):'none';
   });
 }
+// ── APPS SCRIPT CODE (disimpan di JS agar tidak terpotong HTML parser) ──
+const GS_CODE = [
+  '// Sheet: ytm_channels — col A: id, col B: channel_json (1 row per channel)',
+  '// Sheet: ytm_config   — col A: key, col B: value (apiKeys, arSettings)',
+  'function gs(){return SpreadsheetApp.getActiveSpreadsheet();}',
+  'function sh(n){return gs().getSheetByName(n)||gs().insertSheet(n);}',
+  'function upsert(s,k,v){',
+  '  var lr=s.getLastRow();',
+  '  if(lr>0){var d=s.getRange(1,1,lr,1).getValues();',
+  '    for(var i=0;i<d.length;i++){if(d[i][0]===k){s.getRange(i+1,2).setValue(v);return;}}}',
+  '  s.appendRow([k,v]);',
+  '}',
+  'function del(s,k){',
+  '  var lr=s.getLastRow();if(!lr)return;',
+  '  var d=s.getRange(1,1,lr,1).getValues();',
+  '  for(var i=d.length-1;i>=0;i--){if(d[i][0]===k)s.deleteRow(i+1);}',
+  '}',
+  'function doGet(e){',
+  '  try{',
+  '    var cs=sh("ytm_channels"),cf=sh("ytm_config"),chs=[],ak=[],ar={};',
+  '    var cv=cs.getLastRow()>0?cs.getDataRange().getValues():[];',
+  '    for(var i=0;i<cv.length;i++){',
+  '      if(cv[i][0]&&cv[i][1])try{chs.push(JSON.parse(cv[i][1]));}catch(x){}',
+  '    }',
+  '    var fv=cf.getLastRow()>0?cf.getDataRange().getValues():[];',
+  '    for(var i=0;i<fv.length;i++){',
+  '      if(fv[i][0]==="apiKeys")try{ak=JSON.parse(fv[i][1]);}catch(x){}',
+  '      if(fv[i][0]==="arSettings")try{ar=JSON.parse(fv[i][1]);}catch(x){}',
+  '    }',
+  '    return ContentService.createTextOutput(',
+  '      JSON.stringify({channels:chs,apiKeys:ak,arSettings:ar})',
+  '    ).setMimeType(ContentService.MimeType.JSON);',
+  '  }catch(e){',
+  '    return ContentService.createTextOutput(',
+  '      JSON.stringify({error:e.message})',
+  '    ).setMimeType(ContentService.MimeType.JSON);',
+  '  }',
+  '}',
+  'function doPost(e){',
+  '  try{',
+  '    var p=JSON.parse(e.postData.contents),a=p.action;',
+  '    if(a==="upsert_channel")',
+  '      upsert(sh("ytm_channels"),p.channel.id,JSON.stringify(p.channel));',
+  '    else if(a==="delete_channel")',
+  '      del(sh("ytm_channels"),p.id);',
+  '    else if(a==="save_config"){',
+  '      var cf=sh("ytm_config");',
+  '      if(p.apiKeys!==undefined)upsert(cf,"apiKeys",JSON.stringify(p.apiKeys));',
+  '      if(p.arSettings!==undefined)upsert(cf,"arSettings",JSON.stringify(p.arSettings));',
+  '    }else if(a==="bulk_upsert"){',
+  '      var cs=sh("ytm_channels");',
+  '      cs.clearContents();',
+  '      var rows=p.channels.map(function(c){return[c.id,JSON.stringify(c)];});',
+  '      if(rows.length)cs.getRange(1,1,rows.length,2).setValues(rows);',
+  '    }',
+  '    return ContentService.createTextOutput("ok");',
+  '  }catch(e){',
+  '    return ContentService.createTextOutput(',
+  '      JSON.stringify({error:e.message})',
+  '    ).setMimeType(ContentService.MimeType.JSON);',
+  '  }',
+  '}'
+].join('\n');
+
 function copyGSCode(){
   const el=document.getElementById('gs-code');
-  const txt=el.textContent.replace(/Copy$/,'').trim();
-  navigator.clipboard.writeText(txt);
-  el.querySelector('.copy-btn').textContent='✓ Copied';
-  setTimeout(()=>el.querySelector('.copy-btn').textContent='Copy',2000);
+  navigator.clipboard.writeText(el.value);
+  const btn=document.querySelector('.copy-btn');
+  if(btn){btn.textContent='✓ Copied';setTimeout(()=>btn.textContent='Copy',2000);}
 }
 
 // ── API KEYS ──
@@ -458,7 +532,7 @@ function getKey(){
   return null;
 }
 function markKeyErr(key){
-  const k=apiKeys.find(k=>k.key===key);if(k){k.status='err';save();renderApiKeys();}
+  const k=apiKeys.find(k=>k.key===key);if(k){k.status='err';save();shSaveConfig();renderApiKeys();}
 }
 function markKeyActive(key){
   apiKeys.forEach(k=>{if(k.status==='active')k.status='ok';});
@@ -467,9 +541,9 @@ function markKeyActive(key){
 function addApiKey(){
   const inp=document.getElementById('new-key-inp');
   const v=inp.value.trim();if(!v||apiKeys.find(k=>k.key===v))return;
-  apiKeys.push({key:v,status:'idle'});inp.value='';save();renderApiKeys();updateApiSum();
+  apiKeys.push({key:v,status:'idle'});inp.value='';save();shSaveConfig();renderApiKeys();updateApiSum();
 }
-function removeApiKey(i){apiKeys.splice(i,1);save();renderApiKeys();updateApiSum();}
+function removeApiKey(i){apiKeys.splice(i,1);save();shSaveConfig();renderApiKeys();updateApiSum();}
 function toggleApiPanel(){
   const p=document.getElementById('api-panel');p.style.display=p.style.display==='none'?'block':'none';
 }
@@ -590,8 +664,11 @@ function computeMetrics(ch){
 async function refreshOne(id){
   const ch=channels.find(c=>c.id===id);if(!ch||loading[id])return;
   loading[id]=true;renderRowById(id);
-  try{await fetchChannel(ch);save();}
-  catch(e){ch.fetchErr=e.message;}
+  try{
+    await fetchChannel(ch);
+    save();
+    shUpsertCh(ch); // hanya kirim 1 channel, bukan semua
+  }catch(e){ch.fetchErr=e.message;}
   loading[id]=false;renderRowById(id);updateApiSum();
 }
 async function refreshAll(){
@@ -666,7 +743,7 @@ async function doAdd(){
   };
   try{
     await fetchChannel(ch);
-    channels.push(ch);save();closeAdd();render();
+    channels.push(ch);save();shUpsertCh(ch);closeAdd();render();
   }catch(e){
     document.getElementById('add-err').textContent=e.message||'Gagal mengambil data';
   }
@@ -675,21 +752,22 @@ async function doAdd(){
 }
 function removeChannel(id){
   if(!confirm('Hapus channel ini?'))return;
-  channels=channels.filter(c=>c.id!==id);expandedIds.delete(id);save();render();
+  channels=channels.filter(c=>c.id!==id);expandedIds.delete(id);
+  save();shDeleteCh(id);render();
 }
 function toggleExpand(id){
   if(expandedIds.has(id))expandedIds.delete(id);else expandedIds.add(id);
   renderRowById(id);
 }
 function togglePin(id){
-  const ch=channels.find(c=>c.id===id);if(ch){ch.pinned=!ch.pinned;save();render();}
+  const ch=channels.find(c=>c.id===id);if(ch){ch.pinned=!ch.pinned;save();shUpsertCh(ch);render();}
 }
 function updateNote(id,val){
-  const ch=channels.find(c=>c.id===id);if(ch){ch.notes=val;save();}
+  const ch=channels.find(c=>c.id===id);if(ch){ch.notes=val;save();shUpsertCh(ch);}
 }
 
 // ── AUTO REFRESH ──
-function toggleAR(){arSettings.enabled=!arSettings.enabled;save();updateArUI();}
+function toggleAR(){arSettings.enabled=!arSettings.enabled;save();shSaveConfig();updateArUI();}
 function updateArUI(){
   const btn=document.getElementById('ar-toggle');if(btn)btn.textContent=arSettings.enabled?'✓ ON':'OFF';
   const sel=document.getElementById('ar-hour');if(sel)sel.value=arSettings.hour;
@@ -700,7 +778,7 @@ function checkAR(){
   if(!arSettings.enabled)return;
   const now=new Date(),last=arSettings.lastRun?new Date(arSettings.lastRun):null;
   if((!last||last.toDateString()!==now.toDateString())&&now.getHours()>=arSettings.hour){
-    arSettings.lastRun=now.toISOString();save();updateArUI();refreshAll();
+    arSettings.lastRun=now.toISOString();save();shSaveConfig();updateArUI();refreshAll();
   }
 }
 
@@ -718,7 +796,11 @@ function importData(e){
       if(d.channels)channels=d.channels;
       if(d.apiKeys)apiKeys=d.apiKeys.map(k=>typeof k==='string'?{key:k,status:'idle'}:k);
       if(d.arSettings)arSettings={...arSettings,...d.arSettings};
-      save();render();updateArUI();
+      save();
+      // Sync semua ke Sheets sekaligus
+      shBulkUpsert(channels);
+      shSaveConfig();
+      render();updateArUI();
     }catch{alert('File tidak valid');}
   };r.readAsText(f);e.target.value='';
 }

@@ -687,10 +687,12 @@ async function refreshOne(id){
   try{
     await fetchChannel(ch);
     save();
-    shUpsertCh(ch); // hanya kirim 1 channel, bukan semua
+    await shUpsertCh(ch); // await supaya pastikan data masuk Sheets
   }catch(e){ch.fetchErr=e.message;}
   loading[id]=false;renderRowById(id);updateApiSum();
 }
+
+// Dipanggil tombol manual — refresh tab yang sedang aktif
 async function refreshAll(){
   const btn=document.getElementById('btn-ref');if(btn)btn.disabled=true;
   const ico=document.getElementById('ref-ico');if(ico)ico.className='spin';
@@ -700,6 +702,15 @@ async function refreshAll(){
   if(btn)btn.disabled=false;
   if(ico)ico.className='';
   updateApiSum();
+}
+
+// Dipanggil auto-refresh — refresh SEMUA channel semua tab lalu push ke Sheets
+async function refreshAllBackground(){
+  for(const ch of [...channels]){
+    if(!loading[ch.id])await refreshOne(ch.id);
+  }
+  updateApiSum();
+  setSyncSt('✓ Auto-refresh selesai · '+fmtTime(new Date())+' · '+channels.length+' channel diperbarui');
 }
 
 // ── ADD ──
@@ -816,7 +827,8 @@ function checkAR(){
   if(!arSettings.enabled)return;
   const now=new Date(),last=arSettings.lastRun?new Date(arSettings.lastRun):null;
   if((!last||last.toDateString()!==now.toDateString())&&now.getHours()>=arSettings.hour){
-    arSettings.lastRun=now.toISOString();save();shSaveConfig();updateArUI();refreshAll();
+    arSettings.lastRun=now.toISOString();save();shSaveConfig();updateArUI();
+    refreshAllBackground(); // refresh semua tab, bukan hanya tab aktif
   }
 }
 

@@ -414,13 +414,22 @@ async function loadFromSheets(){
     if(!Array.isArray(d.channels)){setSyncSt('⚠ Format Sheets tidak valid');return;}
 
     if(d.channels.length>0){
-      // ✅ Sheets punya data → Sheets jadi source of truth
+      // ✅ Sheets punya data → Sheets jadi source of truth untuk channels & apiKeys
       channels=d.channels;
       apiKeys=(d.apiKeys||[]).map(k=>typeof k==='string'?{key:k,status:'idle'}:k);
-      if(d.arSettings)arSettings={enabled:false,hour:7,lastRun:null,...d.arSettings};
+
+      if(d.arSettings && d.arSettings.enabled!==undefined){
+        // Sheets punya arSettings lengkap → pakai dari Sheets
+        arSettings={enabled:false,hour:7,lastRun:null,...d.arSettings};
+      } else {
+        // Sheets belum punya arSettings → push local ke Sheets supaya device lain ikut sinkron
+        shSaveConfig();
+      }
+
       localStorage.setItem(LS,JSON.stringify({channels,apiKeys,arSettings}));
       setSyncSt('✓ Sync '+fmtTime(new Date())+' · '+channels.length+' channel');
       render();
+      updateArUI(); // update tombol ON/OFF dan jam setelah arSettings di-load dari Sheets
     } else if(channels.length>0){
       // ✅ Sheets kosong tapi lokal punya data → push lokal ke Sheets
       setSyncSt('⟳ Upload data lokal ke Sheets...');

@@ -7,7 +7,7 @@
 <script>
 // ═══════════════════════════════════════════════════════════
 // KONFIGURASI — diisi otomatis oleh sistem, jangan diedit manual
-const SHEETS_URL = "https://script.google.com/macros/s/AKfycbwyNRa-vC3DjS3iIyKa5V4rATnds1IlB94Kr-w9YCr2m3LmCLxk6yphLLc_WLI72n4x/exec";
+const SHEETS_URL = "https://script.google.com/macros/s/AKfycbwYJvU_IoxUuK3BYlLnTAEufN_jMgTcXg3PsyuGllHaUCGlQ06Q1ILZ-cQbCIs3Ee4g/exec";
 const TEAM_PIN   = "siappakai";
 // ═══════════════════════════════════════════════════════════
 </script>
@@ -393,7 +393,9 @@ function loadLocal(){
 // ── SHEETS — granular per-channel ops, bukan dump semua ──
 async function shPost(body){
   if(!SHEETS_URL)return;
-  try{await fetch(SHEETS_URL,{method:'POST',body:JSON.stringify(body),headers:{'Content-Type':'application/json'}});}catch(e){}
+  // TANPA Content-Type header → browser kirim sebagai text/plain → tidak ada CORS preflight
+  // Apps Script tetap bisa baca via e.postData.contents
+  try{await fetch(SHEETS_URL,{method:'POST',body:JSON.stringify(body)});}catch(e){}
 }
 async function shUpsertCh(ch){await shPost({action:'upsert_channel',channel:ch});}
 async function shDeleteCh(id){await shPost({action:'delete_channel',id});}
@@ -453,9 +455,10 @@ function doSetup(){
   const url=document.getElementById('setup-url').value.trim();
   const pin=document.getElementById('setup-pin').value.trim();
   if(!url||!pin){document.getElementById('setup-err').innerHTML='<div class="s-err">URL dan password harus diisi</div>';return;}
+  // Gunakan regex agar bisa replace meski file sudah pernah dikonfigurasi sebelumnya
   const html=document.documentElement.outerHTML
-    .replace('const SHEETS_URL = "";',`const SHEETS_URL = "${url}";`)
-    .replace('const TEAM_PIN   = "";',`const TEAM_PIN   = "${pin}";`);
+    .replace(/const SHEETS_URL = ".*?";/,`const SHEETS_URL = "${url}";`)
+    .replace(/const TEAM_PIN   = ".*?";/,`const TEAM_PIN   = "${pin}";`);
   const b=new Blob(['<!DOCTYPE html>\n'+html],{type:'text/html'});
   const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='index.html';a.click();
   document.getElementById('setup-err').innerHTML='<div style="color:var(--up);font-size:12px;margin-top:10px;line-height:1.7">✓ <strong>index.html</strong> sudah ter-download!<br>Langkah selanjutnya: upload file ini ke GitHub Pages — akses tools via URL GitHub Pages Anda.</div>';
@@ -743,6 +746,14 @@ async function doAdd(){
   const url=document.getElementById('m-url').value.trim();
   if(!url){document.getElementById('add-err').textContent='URL harus diisi';return;}
   if(!getKey()){document.getElementById('add-err').textContent='Tambah API key dulu';return;}
+
+  // Layer 1: cek inputValue duplikat sebelum buang quota API
+  const dupInput=channels.find(c=>c.inputValue.trim().toLowerCase()===url.toLowerCase());
+  if(dupInput){
+    document.getElementById('add-err').textContent=`Sudah ada: "${dupInput.name||dupInput.inputValue}"`;
+    return;
+  }
+
   document.getElementById('btn-add').disabled=true;
   document.getElementById('add-err').textContent='';
   document.getElementById('fetch-st').style.display='flex';
@@ -760,6 +771,16 @@ async function doAdd(){
   };
   try{
     await fetchChannel(ch);
+
+    // Layer 2: cek channelId duplikat setelah resolve (beda URL bisa sama channel)
+    const dupId=channels.find(c=>c.channelId&&c.channelId===ch.channelId);
+    if(dupId){
+      document.getElementById('add-err').textContent=`Channel ini sudah ada: "${dupId.name||dupId.inputValue}"`;
+      document.getElementById('fetch-st').style.display='none';
+      document.getElementById('btn-add').disabled=false;
+      return;
+    }
+
     channels.push(ch);save();shUpsertCh(ch);closeAdd();render();
   }catch(e){
     document.getElementById('add-err').textContent=e.message||'Gagal mengambil data';
